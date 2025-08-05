@@ -1779,7 +1779,8 @@ class HebrewEnhanceTranslation(aLobe):
                     print(f"  [BEST] Using {best_word_count}-word match: '{original_word}' → '{replacement}'")
 
                 # Store the result in the first word's row
-                table.set_result(i + 1, 'milon', replacement, 'MilonProcessor')
+                if replacement and replacement != current_row['source']:
+                    table.set_result(i + 1, 'milon', replacement, 'MilonProcessor')
 
                 # IMMEDIATE GLOBAL CONTEXT UPDATE: Check if replacement contains pronouns
                 if replacement and replacement != original_word:
@@ -2215,11 +2216,17 @@ class HebrewEnhanceTranslation(aLobe):
                     # Check if next word has gender that could override the early processing
                     should_override = False
                     if word.isdigit() and i < len(table.rows):  # Check if there's a next row
-                        next_row_gender = table.rows[i].get('gender')  # i is already 1-based, so table.rows[i] is next row
-                        if next_row_gender and next_row_gender not in ['None', '']:
-                            should_override = True
-                            if self.debug:
-                                print(f"  [OVERRIDE] Reprocessing '{word}' (row {i}) - next word has gender '{next_row_gender}' that may override early processing")
+                        next_row = table.rows[i]
+                        # If next row is just a span marker (heb2num is single digit), keep existing conversion
+                        next_row_span = next_row.get('heb2num')
+                        if next_row_span and next_row_span.isdigit() and len(next_row_span) == 1:
+                            should_override = False
+                        else:
+                            next_row_gender = next_row.get('gender')
+                            if next_row_gender and next_row_gender not in ['None', '']:
+                                should_override = True
+                                if self.debug:
+                                    print(f"  [OVERRIDE] Reprocessing '{word}' (row {i}) - next word has gender '{next_row_gender}' that may override early processing")
 
                     if not should_override:
                         # Already has a real Hebrew conversion, keep it
@@ -2414,6 +2421,25 @@ class HebrewEnhanceTranslation(aLobe):
     def _process_percentage_patterns_in_table(self, table):
         """Process percentage patterns for unconsumed table rows"""
         import re
+
+        # Process standalone percentage patterns: 12.5%
+        standalone_pattern = r'^(\d+(?:\.\d+)?)%$'
+
+        for i, row in enumerate(table.rows, 1):
+            if table.is_consumed(i):
+                continue
+            source_text = row['source']
+            match = re.match(standalone_pattern, source_text)
+            if match:
+                number_str = match.group(1)
+                hebrew_percentage = self._convert_percentage_to_hebrew(number_str)
+                converted = f"{hebrew_percentage}"
+                table.set_result(i, 'pattern', converted, 'PatternProcessor_Percentage')
+                table.mark_consumed(i, i, 'PERCENTAGE_STANDALONE', 'PatternProcessor')
+                if self.debug:
+                    print(f"[DEBUG] STANDALONE PERCENTAGE: '{source_text}' -> '{converted}'")
+                if table:
+                    self._store_conversion_in_table(table, source_text, converted, "PERCENTAGE_STANDALONE")
 
         # Process single-word patterns: ל-12.5%
         single_word_pattern = r'([א-ת]+)-(\d+(?:\.\d+)?)%'
@@ -4409,6 +4435,11 @@ class HebrewEnhanceTranslation(aLobe):
         for match in reversed(dd_mm_matches):
             if is_match_inside_highlight_block(match, processed_text):
                 print(f"[DEBUG] SKIPPING DD.MM match inside highlight block: {match.group(0)}")
+                continue
+
+            # Skip if immediately followed by % (percentage like 9.5%)
+            if match.end() < len(processed_text) and processed_text[match.end()] == '%':
+                print(f"[DEBUG] SKIPPING DD.MM match – looks like percentage: {match.group(0)}%")
                 continue
 
             day_str = match.group(1)    # 5
