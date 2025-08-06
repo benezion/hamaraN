@@ -1,4 +1,5 @@
 import argparse
+import os
 from datetime import datetime
 from engine import HebrewEnhanceTranslation
 from tts import TTSProcessor
@@ -14,6 +15,7 @@ def main():
     parser.add_argument('--voice_id', type=str, default=None, help='Voice ID for TTS (optional)')
     parser.add_argument('--output_html', type=str, default='./temp_files/output.html', help='Output HTML file path')
     parser.add_argument('--tts_engine', type=str, default='google', choices=['google', 'gtts'], help='TTS engine to use: google or gtts')
+
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     # Note: Table processing is now the only option - clean output with no ~ characters
     args = parser.parse_args()
@@ -177,20 +179,56 @@ def main():
     if args.tts:
         tts_processor = TTSProcessor(engine=args.tts_engine, debug=args.debug)
         voice_id = args.voice_id if args.voice_id != "None" else None
-
-        # Save MP3 file in current directory with a unique timestamp name
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_mp3_path = f"./output_audio_{timestamp}.mp3"
-        audio_path = tts_processor.text_to_speech(
+
+        # Sentence-based TTS generation with concatenation (default behavior)
+        if args.debug:
+            print(f"\n🎵 SENTENCE-BASED TTS MODE")
+            print(f"{'='*60}")
+        
+        # Use local temp_files directory for sentence MP3s
+        sentence_output_dir = os.path.join(os.getcwd(), "temp_files")
+        os.makedirs(sentence_output_dir, exist_ok=True)
+        
+        sentence_result = tts_processor.text_to_speech_by_sentences(
             result['ssml_clean'],
             gender=args.gender[-1],
             voice_id=voice_id,
-            output_path=output_mp3_path
+            output_dir=sentence_output_dir,
+            base_name=f"sentence_{timestamp}",
+            play_individual=False  # Don't play individual sentences, only the final combined file
         )
-
-        if args.debug:
-            print(f"🔊 MP3 file saved to: {audio_path}")
-            print(f"🎵 You can find your audio file at: {output_mp3_path}")
+        
+        if sentence_result:
+            # Copy combined file to timestamped output
+            output_mp3_path = f"./output_audio_{timestamp}.mp3"
+            import shutil
+            shutil.copy2(sentence_result['combined_file'], output_mp3_path)
+            
+            if args.debug:
+                print(f"\n📊 SENTENCE TTS RESULTS:")
+                print(f"  📝 Total sentences: {len(sentence_result['sentence_texts'])}")
+                print(f"  🎵 Individual MP3s: {len(sentence_result['individual_files'])}")
+                print(f"  ⏱️  Processing time: {sentence_result['total_time_ms']:.1f}ms")
+                print(f"  📁 Individual files saved in: {os.path.dirname(sentence_result['individual_files'][0])}")
+                print(f"  🎯 Combined file: {sentence_result['combined_file']}")
+                print(f"  📋 Final output: {output_mp3_path}")
+                
+                # Show sentence breakdown
+                print(f"\n📋 SENTENCE BREAKDOWN:")
+                for i, (sentence, mp3_file) in enumerate(zip(sentence_result['sentence_texts'], sentence_result['individual_files'])):
+                    print(f"  {i+1:2d}. '{sentence[:50]}...' → {os.path.basename(mp3_file)}")
+            
+            # Play the final combined file
+            if args.debug:
+                print(f"\n🎵 PLAYING FINAL COMBINED FILE...")
+            tts_processor.play_audio(sentence_result['combined_file'])
+            
+            print(f"🎵 You can find your combined audio file at: {output_mp3_path}")
+            if args.debug:
+                print(f"🔊 Individual sentence files available in: {os.path.dirname(sentence_result['individual_files'][0])}")
+        else:
+            print(f"❌ Failed to generate sentence-based TTS")
 
     # Print results
     if args.debug:

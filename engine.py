@@ -604,11 +604,30 @@ class HebrewEnhanceTranslation(aLobe):
                 )
                 replacement = row.iloc[0][column_to_use]
             else:
-                # No person indicators AND no Nikud - use original word
-                replacement = row.iloc[0]['Original']
-                tts_gender = "male"  # Default TTS gender
-                if self.debug:
-                    print(f"[DEBUG] No person indicators and no Nikud - using original word: '{replacement}'")
+                # No person indicators AND no Nikud - check if it's a slash form
+                if '/' in search_word:
+                    # Slash form without person indicators - show both forms: "זכר, נקבה"
+
+                    zachar_val = row.iloc[0].get('Zachar', '') if 'Zachar' in row.columns else ''
+                    nekeva_val = row.iloc[0].get('Nekeva', '') if 'Nekeva' in row.columns else ''
+                    
+                    if pd.notna(zachar_val) and pd.notna(nekeva_val) and str(zachar_val).strip() and str(nekeva_val).strip():
+                        replacement = f"{str(zachar_val).strip()}, {str(nekeva_val).strip()}"
+                        tts_gender = "male"  # Default TTS gender for combined forms
+                        if self.debug:
+                            print(f"[DEBUG] Slash form '{search_word}' with no person indicators - combining both forms: '{replacement}'")
+                    else:
+                        # Fallback to original if gender columns are empty
+                        replacement = row.iloc[0]['Original']
+                        tts_gender = "male"
+                        if self.debug:
+                            print(f"[DEBUG] Slash form '{search_word}' - gender columns empty, using original: '{replacement}'")
+                else:
+                    # Regular word - use original word
+                    replacement = row.iloc[0]['Original']
+                    tts_gender = "male"  # Default TTS gender
+                    if self.debug:
+                        print(f"[DEBUG] No person indicators and no Nikud - using original word: '{replacement}'")
 
             if pd.isna(replacement) or not str(replacement).strip():
                 # If chosen gender column is empty, check if both Zachar and Nekeva are empty
