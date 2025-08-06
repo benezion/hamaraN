@@ -17,6 +17,7 @@ def main():
     parser.add_argument('--tts_engine', type=str, default='google', choices=['google', 'gtts'], help='TTS engine to use: google or gtts')
 
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('--excel', action='store_true', help='Export processing table to Excel (hamara_table.xlsx)')
     # Note: Table processing is now the only option - clean output with no ~ characters
     args = parser.parse_args()
 
@@ -241,6 +242,37 @@ def main():
             print(f"Dictionary replacements: {len(result['dict_words'])} words")
             for orig, repl in result['dict_words'].items():
                 print(f"  '{orig}' → '{repl}'")
+
+    # Excel export
+    if args.excel:
+        try:
+            # Export table from single line processing
+            if 'processing_table' in result and result['processing_table']:
+                table = result['processing_table']
+                success = table.export_to_excel("hamara_table.xlsx")
+                if success:
+                    print("📊 Processing table exported to: hamara_table.xlsx")
+                else:
+                    print("❌ Failed to export processing table to Excel")
+            # Export table from multi-line processing
+            elif 'processed_lines' in result and result['processed_lines']:
+                # For multi-line processing, export the first table as example
+                # (could be enhanced to combine all tables or export separately)
+                first_line_result = result['processed_lines'][0]
+                if 'processing_table' in first_line_result and first_line_result['processing_table']:
+                    table = first_line_result['processing_table']
+                    success = table.export_to_excel("hamara_table_line1.xlsx")
+                    if success:
+                        print("📊 First line processing table exported to: hamara_table_line1.xlsx")
+                        print("💡 Note: Multi-line processing - only first line table exported")
+                    else:
+                        print("❌ Failed to export processing table to Excel")
+                else:
+                    print("❌ No processing table found in results")
+            else:
+                print("❌ No processing table available for export")
+        except Exception as e:
+            print(f"❌ Excel export error: {e}")
 
     # Cleanup debug file
     if args.debug:

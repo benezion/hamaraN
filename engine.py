@@ -581,6 +581,9 @@ class HebrewEnhanceTranslation(aLobe):
         if self.debug:
             print(f"[DEBUG] search_in_milon: Person indicator detected: {has_person_indicator}")
 
+        # Track whether we used the original word as fallback
+        used_original_word = False
+        
         # Process replacement using existing logic
         if 'Nikud' in row.columns and pd.notna(row.iloc[0]['Nikud']) and str(row.iloc[0]['Nikud']).strip() != '':
             if has_person_indicator:
@@ -619,12 +622,14 @@ class HebrewEnhanceTranslation(aLobe):
                     else:
                         # Fallback to original if gender columns are empty
                         replacement = row.iloc[0]['Original']
+                        used_original_word = True
                         tts_gender = "male"
                         if self.debug:
                             print(f"[DEBUG] Slash form '{search_word}' - gender columns empty, using original: '{replacement}'")
                 else:
                     # Regular word - use original word
                     replacement = row.iloc[0]['Original']
+                    used_original_word = True
                     tts_gender = "male"  # Default TTS gender
                     if self.debug:
                         print(f"[DEBUG] No person indicators and no Nikud - using original word: '{replacement}'")
@@ -647,21 +652,27 @@ class HebrewEnhanceTranslation(aLobe):
                         # The milon contains proper את + verb → אַתְּ + verb entries
                         # If not found in milon, keep original word (likely direct object marker)
                         replacement = row.iloc[0]['Original']
+                        used_original_word = True
                         if self.debug:
                             self._debug(f"No conversion data found, using original word: '{replacement}'")
                 else:
                     replacement = row.iloc[0]['Original']
+                    # Mark that we used original word so we don't double-add prefix
+                    used_original_word = True
                     if self.debug:
                         self._debug(f"Column '{column_to_use}' is empty, using original word: '{replacement}'")
 
         # Handle prefix reconstruction if this was found via prefix stripping
         if 'Prefix' in row.columns and pd.notna(row.iloc[0]['Prefix']) and str(row.iloc[0]['Prefix']).strip():
             prefix = str(row.iloc[0]['Prefix']).strip()
-            if replacement and not str(replacement).startswith(prefix):
+            if replacement and not used_original_word:
+                # Add prefix back only if we didn't use original word (which already has prefix)
                 original_replacement = replacement
                 replacement = prefix + replacement
                 if self.debug:
                     self._debug(f"Reconstructed with prefix: '{prefix}' + '{original_replacement}' -> '{replacement}'")
+            elif self.debug and used_original_word:
+                self._debug(f"Skipping prefix reconstruction - used original word: '{replacement}'")
 
         # Handle gender tracking and check if exclusive gender was found
         is_exclusive_gender = self._update_milon_gender_tracking(row, search_word)
@@ -866,7 +877,8 @@ class HebrewEnhanceTranslation(aLobe):
             'ssml_marked': ssml_marked,
             'show_text': text,  # Original input for display
             'dict_words': dict_words,
-            'original_input': text
+            'original_input': text,
+            'processing_table': table  # Include table for export functionality
         }
 
     def run_complete_number_processor_on_source(self, table):
@@ -2281,10 +2293,10 @@ class HebrewEnhanceTranslation(aLobe):
                         elif self.debug:
                             print(f"  [DEFAULT] Row index out of range, using default feminine for number '{word}' (row {i})")
 
-                    # Priority 3: Default feminine (already set)
-                    if gender_char == 'f' and gender_source == "default feminine":
-                        if self.debug:
-                            print(f"  [PRIORITY 3] Using default feminine gender for number '{word}' (row {i}) - no context found")
+                        # Priority 3: Default feminine (already set)
+                        if gender_char == 'f' and gender_source == "default feminine":
+                            if self.debug:
+                                print(f"  [PRIORITY 3] Using default feminine gender for number '{word}' (row {i}) - no context found")
 
                     # Check if next word ends with ם or ת (like אגורות format)
                     if i < len(table.rows):  # Check if there's a next word
