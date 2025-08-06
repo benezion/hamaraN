@@ -1329,8 +1329,8 @@ class HebrewEnhanceTranslation(aLobe):
             return word  # Keep את as-is when it's standalone (direct object marker)
 
         # Don't clean complete pronouns that happen to start with prefixes
-        if word in ['אתה', 'אני', 'אנחנו', 'אתם', 'אתן', 'אַתְּ', 'שאתה', 'ואתה', 'כשאתה', 'שאַתְּ', 'ואַתְּ', 'כשאַתְּ', 'שאת/ה', 'צריך/ה', 'לך']:
-            return word  # Keep pronouns as-is
+        if word in ['אתה', 'אני', 'אנחנו', 'אתם', 'אתן', 'אַתְּ', 'שאתה', 'ואתה', 'כשאתה', 'שאַתְּ', 'ואַתְּ', 'כשאַתְּ', 'לך', 'את/ה']:
+            return word  # Keep pronouns as-is (added את/ה back for person detection)
 
         # Remove common prefixes (both with and without hyphens)
         # Note: Longer prefixes must come first to avoid partial matches
@@ -1407,6 +1407,8 @@ class HebrewEnhanceTranslation(aLobe):
                                 zachar_col = matches.iloc[0].get('Zachar', '') if 'Zachar' in matches.columns else ''
                                 nekeva_col = matches.iloc[0].get('Nekeva', '') if 'Nekeva' in matches.columns else ''
 
+
+                                # Only one column has data → infer gender from that
                                 if nekeva_col and str(nekeva_col).strip() and str(nekeva_col).strip() != 'nan':
                                     return 'f'
                                 elif zachar_col and str(zachar_col).strip() and str(zachar_col).strip() != 'nan':
@@ -1524,33 +1526,8 @@ class HebrewEnhanceTranslation(aLobe):
                 gender_letter = 'm' if tts_gender == "male" else 'f' if tts_gender == "female" else None
                 return (search_word, replacement, gender_letter, is_exclusive_gender)
 
-            # DUAL GENDER FORM HANDLING: If original lookup failed and word contains /ה, try without /ה
-            if not found and '/ה' in search_word:
-                base_word = search_word.replace('/ה', '')
-                if self.debug:
-                    print(f"[DEBUG] _pure_milon_lookup: Trying dual gender form: '{search_word}' -> '{base_word}'")
-
-                # Try lookup with base word (e.g., צריך instead of צריך/ה)
-                marked_replacement, replacement, tts_gender, found, is_exclusive_gender = self.search_in_milon(
-                    search_word=base_word,
-                    person_context=None,
-                    source_gender=source_gender,
-                    target_gender=target_gender,
-                    source_tts_gender=source_tts_gender,
-                    target_tts_gender=target_tts_gender,
-                    gender_context=gender_context,
-                    existing_highlight_blocks=[],
-                    text=base_word,
-                    leading_punct="",
-                    trailing_punct=""
-                )
-
-                if found:
-                    # Convert tts_gender to single letter format for table
-                    gender_letter = 'm' if tts_gender == "male" else 'f' if tts_gender == "female" else None
-                    if self.debug:
-                        print(f"[DEBUG] _pure_milon_lookup: Dual gender form found: '{base_word}' -> '{replacement}'")
-                    return (search_word, replacement, gender_letter, is_exclusive_gender)  # Return with original word as key
+            # Dual gender forms should be handled through the milon dictionary
+            # Removed hardcoded /ה handling - all slash forms should be in milon
 
             return None
 
@@ -1577,6 +1554,7 @@ class HebrewEnhanceTranslation(aLobe):
                 i += 1
                 continue
 
+
             # Skip if word has span marker in heb2num or pattern column
             heb2num_val = current_row.get('heb2num', '')
             pattern_val = current_row.get('pattern', '')
@@ -1595,6 +1573,9 @@ class HebrewEnhanceTranslation(aLobe):
             # Step 1: Check if first word exists (early exit check)
             if i < len(table.rows):
                 first_word = table.rows[i]['source']
+
+                # Slash forms (את/ה, מאמינ/ה, etc.) should be handled through milon dictionary
+                # Removed hardcoded slash handling - all slash forms should be in milon
                                 # Determine gender context with priority: 1) Explicit pronouns, 2) Local person context, 3) Global context
                 preprocessed_gender = table.rows[i].get('gender')
                 global_gender = self.text_processor.global_context.get('detected_gender')
@@ -1602,6 +1583,7 @@ class HebrewEnhanceTranslation(aLobe):
                 # Check if this word is an explicit pronoun that should not be overridden
                 is_explicit_pronoun = (first_word in PERSON_INDICATORS['second']['male'] or
                                      first_word in PERSON_INDICATORS['second']['female'] or
+                                     first_word in PERSON_INDICATORS['second']['neutral'] or
                                      first_word in PERSON_INDICATORS['first'])
 
                 # Check if previous word was a first person pronoun (for local context)
@@ -1628,7 +1610,7 @@ class HebrewEnhanceTranslation(aLobe):
                 recent_second_person_context = None
                 for prev_i in range(max(0, i-3), i):  # Check up to 3 words back
                     prev_word = table.rows[prev_i]['source']
-                    if prev_word == 'את' or prev_word.endswith('את') or prev_word in PERSON_INDICATORS['second']['male'] or prev_word in PERSON_INDICATORS['second']['female']:
+                    if prev_word == 'את' or prev_word.endswith('את') or prev_word in PERSON_INDICATORS['second']['male'] or prev_word in PERSON_INDICATORS['second']['female'] or prev_word in PERSON_INDICATORS['second']['neutral']:
                         # Found recent second person pronoun - use target gender
                         target_gender_letter = self.gender[2] if len(self.gender) >= 3 else self.gender[0]
                         recent_second_person_context = target_gender_letter
@@ -1707,6 +1689,7 @@ class HebrewEnhanceTranslation(aLobe):
                         first_word_in_combo = table.rows[i]['source'] if i < len(table.rows) else ""
                         is_explicit_pronoun = (first_word_in_combo in PERSON_INDICATORS['second']['male'] or
                                              first_word_in_combo in PERSON_INDICATORS['second']['female'] or
+                                             first_word_in_combo in PERSON_INDICATORS['second']['neutral'] or
                                              first_word_in_combo in PERSON_INDICATORS['first'])
 
                                                 # Check if previous word was a first person pronoun (for local context)
@@ -1729,7 +1712,7 @@ class HebrewEnhanceTranslation(aLobe):
                         recent_second_person_context = None
                         for prev_i in range(max(0, i-3), i):  # Check up to 3 words back
                             prev_word = table.rows[prev_i]['source']
-                            if prev_word == 'את' or prev_word.endswith('את') or prev_word in PERSON_INDICATORS['second']['male'] or prev_word in PERSON_INDICATORS['second']['female']:
+                            if prev_word == 'את' or prev_word.endswith('את') or prev_word in PERSON_INDICATORS['second']['male'] or prev_word in PERSON_INDICATORS['second']['female'] or prev_word in PERSON_INDICATORS['second']['neutral']:
                                 # Found recent second person pronoun - use target gender
                                 target_gender_letter = self.gender[2] if len(self.gender) >= 3 else self.gender[0]
                                 recent_second_person_context = target_gender_letter
@@ -1908,23 +1891,21 @@ class HebrewEnhanceTranslation(aLobe):
                     for next_row_idx in range(i + best_word_count + 1, min(i + best_word_count + 4, len(table.rows) + 1)):
                         if next_row_idx <= len(table.rows):
                             next_word = table.rows[next_row_idx - 1]['source'] if next_row_idx - 1 < len(table.rows) else ""
-                            # Check if this word has both gender forms (slash pattern) - override inherent gender for consistency
-                            has_slash = '/' in next_word
+                            # Gender forms should be determined by milon dictionary, not slash patterns
                             existing_gender = table.rows[next_row_idx - 1].get('gender') if next_row_idx - 1 < len(table.rows) else None
                             # Skip standalone numbers - they should default to feminine, not inherit previous word's gender
                             is_standalone_number = next_word.isdigit()
                             # RULE: Only apply gender consistency to words that will actually be processed/changed
                             # Skip gender assignment for words that don't change (like prepositions עד, דרך)
                             will_be_processed = (
-                                has_slash or  # Words with gender forms like "לך/לְכִי"
                                 self._word_will_likely_change_in_milon(next_word)  # Words likely to be converted
                             )
 
-                            if next_word and (not existing_gender or has_slash) and not is_standalone_number and will_be_processed:
+                            if next_word and not existing_gender and not is_standalone_number and will_be_processed:
                                 table.set_result(next_row_idx, 'gender', chosen_gender, 'GenderConsistency')
                                 table.set_result(next_row_idx, 'gender_source', 'PreviousWordContext', 'GenderConsistency')
                                 if self.debug:
-                                    action = "Overriding inherent" if has_slash and existing_gender else "Setting"
+                                    action = "Overriding inherent" if existing_gender else "Setting"
                                     print(f"[DEBUG] *** GENDER CONSISTENCY: {action} row {next_row_idx} ('{next_word}') gender to '{chosen_gender}' for consistency with {context_reason}")
                             elif next_word and not will_be_processed and self.debug:
                                 print(f"[DEBUG] *** SKIPPING GENDER CONSISTENCY for row {next_row_idx} ('{next_word}') - word unlikely to change")
@@ -2245,34 +2226,41 @@ class HebrewEnhanceTranslation(aLobe):
                             print(f"  [DIGITS] 7+ digit number: '{word}' → '{hebrew_digits}' (row {i}, digit-by-digit feminine)")
                         continue  # Skip regular number processing
 
-                    # NEW RULE: Use current row gender first, then next word gender, default to feminine
-                    gender_char = 'f'  # Default to feminine
-                    gender_source = "default feminine"
+                    # Check if this is a year-like number (2000-2030) - force feminine and skip other gender detection
+                    if 2000 <= number <= 2030:
+                        gender_char = 'f'
+                        gender_source = "year range (2000-2030) - forced feminine"
+                        if self.debug:
+                            print(f"  [YEAR_RANGE] Forcing feminine gender for year-like number '{number}' (row {i})")
+                    else:
+                        # NEW RULE: Use current row gender first, then next word gender, default to feminine
+                        gender_char = 'f'  # Default to feminine
+                        gender_source = "default feminine"
 
-                    # Priority 1: Use current row gender
-                    current_row_index = i - 1  # Convert to 0-based index
-                    if current_row_index < len(table.rows):
-                        current_row_gender = table.rows[current_row_index].get('gender')
-                        if current_row_gender and current_row_gender not in ['None', '']:
-                            gender_char = current_row_gender
-                            gender_source = f"current row {i}"
-                            if self.debug:
-                                print(f"  [CURRENT_ROW] Using gender from current row: '{gender_char}' for number '{word}' (row {i})")
-                        else:
-                            # Priority 2: Check next word gender (for patterns like "4 ביולי")
-                            if i < len(table.rows):  # Check if there's a next row
-                                next_row_gender = table.rows[i].get('gender')  # i is already 1-based, so table.rows[i] is next row
-                                if next_row_gender and next_row_gender not in ['None', '']:
-                                    gender_char = next_row_gender
-                                    gender_source = f"next word (row {i + 1})"
-                                    if self.debug:
-                                        print(f"  [NEXT_WORD] Using gender from next word: '{gender_char}' for number '{word}' (row {i})")
+                        # Priority 1: Use current row gender
+                        current_row_index = i - 1  # Convert to 0-based index
+                        if current_row_index < len(table.rows):
+                            current_row_gender = table.rows[current_row_index].get('gender')
+                            if current_row_gender and current_row_gender not in ['None', '']:
+                                gender_char = current_row_gender
+                                gender_source = f"current row {i}"
+                                if self.debug:
+                                    print(f"  [CURRENT_ROW] Using gender from current row: '{gender_char}' for number '{word}' (row {i})")
+                            else:
+                                # Priority 2: Check next word gender (for patterns like "4 ביולי")
+                                if i < len(table.rows):  # Check if there's a next row
+                                    next_row_gender = table.rows[i].get('gender')  # i is already 1-based, so table.rows[i] is next row
+                                    if next_row_gender and next_row_gender not in ['None', '']:
+                                        gender_char = next_row_gender
+                                        gender_source = f"next word (row {i + 1})"
+                                        if self.debug:
+                                            print(f"  [NEXT_WORD] Using gender from next word: '{gender_char}' for number '{word}' (row {i})")
+                                    elif self.debug:
+                                        print(f"  [DEFAULT] Current and next rows have no gender, using default feminine for number '{word}' (row {i})")
                                 elif self.debug:
-                                    print(f"  [DEFAULT] Current and next rows have no gender, using default feminine for number '{word}' (row {i})")
-                            elif self.debug:
-                                print(f"  [DEFAULT] No next row, using default feminine for number '{word}' (row {i})")
-                    elif self.debug:
-                        print(f"  [DEFAULT] Row index out of range, using default feminine for number '{word}' (row {i})")
+                                    print(f"  [DEFAULT] No next row, using default feminine for number '{word}' (row {i})")
+                        elif self.debug:
+                            print(f"  [DEFAULT] Row index out of range, using default feminine for number '{word}' (row {i})")
 
                     # Priority 3: Default feminine (already set)
                     if gender_char == 'f' and gender_source == "default feminine":
@@ -5000,10 +4988,20 @@ class HebrewEnhanceTranslation(aLobe):
                                                  '\u05D0' <= processed_text[number_start-2] <= '\u05EA')  # Hebrew letter
 
                             if is_prefixed_number:
-                                # For prefixed numbers, use construct state ONLY if the governing noun starts with ה
-                                # Example: ל-5 התשלומים (construct) vs ל-3 תשלומים (absolute)
+                                # For prefixed numbers, determine construct state based on prefix and noun
                                 gender_code = 'm' if noun_info['gender'] == 'זכר' else 'f'
-                                use_construct_for_prefix = noun.startswith('ה') if noun else False
+                                
+                                # Get the prefix character
+                                prefix_char = processed_text[number_start-2] if number_start >= 2 else ''
+                                
+                                # Use construct state for:
+                                # 1. ש- prefix (relative pronoun "that")
+                                # 2. Numbers with definite article ה
+                                use_construct_for_prefix = (
+                                    prefix_char == 'ש' or  # ש-2 שקלים = ששני שקלים 
+                                    (noun and noun.startswith('ה'))  # ל-5 התשלומים
+                                )
+                                
                                 converted = self.heb2num(int(number_str), gender_code, construct_state=use_construct_for_prefix)
                                 if self.debug:
                                     print(f"[DEBUG] PREFIXED heb2num('{number_str}', '{gender_code}', construct_state={use_construct_for_prefix}) returned: '{converted}' (prefixed number, noun='{noun}')")
