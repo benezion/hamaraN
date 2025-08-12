@@ -40,6 +40,15 @@ class HebrewEnhanceTranslation(aLobe):
         self._search_cache = {}
         self._cache_hits = 0
         self._cache_misses = 0
+        self._word_cache_hits = 0
+        self._word_cache_misses = 0
+        self._combo_cache_hits = 0
+        self._combo_cache_misses = 0
+        
+        # Add comprehensive result caching for complete word processing
+        self._word_result_cache = {}  # Cache complete processing results
+        self._context_cache = {}      # Cache gender context calculations
+        self._combination_cache = {}  # Cache word combination results
 
         self._hebrew_nouns_gender = {
             'כוכבית': 'f',
@@ -77,6 +86,59 @@ class HebrewEnhanceTranslation(aLobe):
         if not self.date_processor:
             raise RuntimeError("Date processor not initialized")
         return self.date_processor
+
+    def _get_nikudized_month_name(self, month_name):
+        """Convert month name to nikudized version from HEBREW_MONTHS, handling ב prefix"""
+        if self.debug:
+            print(f"[DEBUG] _get_nikudized_month_name called with: '{month_name}'")
+            
+        # Check if month starts with ב prefix
+        if month_name.startswith('ב'):
+            # Extract the base month name (without ב)
+            base_month = month_name[1:]
+            
+            # Map of non-nikudized to nikudized month names  
+            month_mapping = {
+                'ינואר': HEBREW_MONTHS[1],   # יָנוּאָר
+                'פברואר': HEBREW_MONTHS[2],  # פֶבְּרוּאָר
+                'מרץ': HEBREW_MONTHS[3],     # מֵרְץ
+                'אפריל': HEBREW_MONTHS[4],   # אַפְּרִיל
+                'מאי': HEBREW_MONTHS[5],     # מַאי
+                'יוני': HEBREW_MONTHS[6],    # יוּנִי
+                'יולי': HEBREW_MONTHS[7],    # יוּלִי
+                'אוגוסט': HEBREW_MONTHS[8],  # אוֹגוּסְט
+                'ספטמבר': HEBREW_MONTHS[9],  # סֶפְּטֶמְבֶּר
+                'אוקטובר': HEBREW_MONTHS[10], # אוֹקְטוֹבֶּר
+                'נובמבר': HEBREW_MONTHS[11],  # נוֹבֶמְבֶּר
+                'דצמבר': HEBREW_MONTHS[12]   # דֵּצֶמְבֶּר
+            }
+            
+            # Get nikudized month and add nikudized ב prefix
+            nikudized_base = month_mapping.get(base_month, base_month)
+            result = f"בְּ{nikudized_base}"
+            if self.debug:
+                print(f"[DEBUG] Nikudizing month with ב prefix: '{month_name}' → '{result}'")
+            return result
+        else:
+            # Handle month names without ב prefix
+            month_mapping = {
+                'ינואר': HEBREW_MONTHS[1],   # יָנוּאָר
+                'פברואר': HEBREW_MONTHS[2],  # פֶבְּרוּאָר
+                'מרץ': HEBREW_MONTHS[3],     # מֵרְץ
+                'אפריל': HEBREW_MONTHS[4],   # אַפְּרִיל
+                'מאי': HEBREW_MONTHS[5],     # מַאי
+                'יוני': HEBREW_MONTHS[6],    # יוּנִי
+                'יולי': HEBREW_MONTHS[7],    # יוּלִי
+                'אוגוסט': HEBREW_MONTHS[8],  # אוֹגוּסְט
+                'ספטמבר': HEBREW_MONTHS[9],  # סֶפְּטֶמְבֶּר
+                'אוקטובר': HEBREW_MONTHS[10], # אוֹקְטוֹבֶּר
+                'נובמבר': HEBREW_MONTHS[11],  # נוֹבֶמְבֶּר
+                'דצמבר': HEBREW_MONTHS[12]   # דֵּצֶמְבֶּר
+            }
+            result = month_mapping.get(month_name, month_name)
+            if self.debug:
+                print(f"[DEBUG] Nikudizing month without prefix: '{month_name}' → '{result}'")
+            return result
 
     def _load_gender_information(self):
         f"""Load gender information from {EXCEL_FILENAME} Noun_Genders sheet"""
@@ -577,6 +639,14 @@ class HebrewEnhanceTranslation(aLobe):
             self.text_processor.global_context.get('force_maintain_gender') or
             person_context in ["FIRST_PERSON", "SECOND_PERSON"]
         )
+        
+        # POSSESSIVE PRONOUN FIX: Check if this is a possessive pronoun that should undergo gender conversion
+        is_possessive = self._is_possessive_pronoun(search_word)
+        if is_possessive:
+            # Set flag in global context so hebrew.py can see it
+            self.text_processor.global_context['force_possessive_conversion'] = True
+            if self.debug:
+                print(f"[DEBUG] Detected possessive pronoun '{search_word}' - will force gender conversion")
 
         if self.debug:
             print(f"[DEBUG] search_in_milon: Person indicator detected: {has_person_indicator}")
@@ -584,33 +654,76 @@ class HebrewEnhanceTranslation(aLobe):
         # Track whether we used the original word as fallback
         used_original_word = False
         
+        # Check if there's actual conversion data available (non-empty gender columns)
+        zachar_val = row.iloc[0].get('Zachar', '') if 'Zachar' in row.columns else ''
+        nekeva_val = row.iloc[0].get('Nekeva', '') if 'Nekeva' in row.columns else ''
+        has_conversion_data = (
+            (pd.notna(zachar_val) and str(zachar_val).strip()) or 
+            (pd.notna(nekeva_val) and str(nekeva_val).strip())
+        )
+        
         # Process replacement using existing logic
         if 'Nikud' in row.columns and pd.notna(row.iloc[0]['Nikud']) and str(row.iloc[0]['Nikud']).strip() != '':
-            if has_person_indicator:
-                # Person indicators found - use full gender logic
+            if (has_person_indicator or is_possessive) and has_conversion_data:
+                # Person indicators found OR possessive pronoun AND conversion data available - use full gender logic
                 replacement, tts_gender = self.text_processor.process_nikud_replacement(
                     row, person_context, False, source_gender, target_gender,
                     source_tts_gender, target_tts_gender, gender_context, self.debug
                 )
+                if is_possessive and self.debug:
+                    print(f"[DEBUG] Possessive pronoun '{search_word}' using gender conversion: '{replacement}'")
+            elif (has_person_indicator or is_possessive) and not has_conversion_data:
+                # Person/possessive context but NO conversion data - keep original word
+                replacement = row.iloc[0]['Original']
+                used_original_word = True
+                tts_gender = "male"
+                if self.debug:
+                    print(f"[DEBUG] Person/possessive context but no conversion data - keeping original: '{replacement}'")
             else:
-                # No person indicators - ONLY use Nikud column, ignore gender columns
+                # No person indicators and not possessive - ONLY use Nikud column, ignore gender columns
                 replacement = str(row.iloc[0]['Nikud']).strip()
                 tts_gender = "male"  # Default TTS gender when no person context
                 if self.debug:
                     print(f"[DEBUG] No person indicators - using ONLY Nikud column: '{replacement}'")
         else:
-            if has_person_indicator:
+            if has_person_indicator or is_possessive:
                 # Handle cases where Nikud column is empty - use gender columns
                 person_value = row.iloc[0].get('person_value') if 'person_value' in row.columns else None
                 column_to_use, tts_gender = self.text_processor.determine_column_and_gender(
                     person_context, False, source_gender, target_gender, gender_context, True, False, person_value
                 )
                 replacement = row.iloc[0][column_to_use]
+                if is_possessive and self.debug:
+                    print(f"[DEBUG] Possessive pronoun '{search_word}' using gender column '{column_to_use}': '{replacement}'")
             else:
-                # No person indicators AND no Nikud - check if it's a slash form
-                if '/' in search_word:
-                    # Slash form without person indicators - show both forms: "זכר, נקבה"
+                # No external person indicators AND no Nikud
+                # Check if milon entry has person_value information for grammar-based conversion
+                person_value = row.iloc[0].get('person_value') if 'person_value' in row.columns else None
+                guf_value = row.iloc[0].get('גוף') if 'גוף' in row.columns else None
+                
 
+                
+                # Use גוף column if person_value is not available
+                if person_value is None and guf_value is not None:
+                    person_value = guf_value
+                
+                # Check if entry has grammatical person information that should trigger gender conversion
+                has_milon_person_info = person_value in ["ראשון", "שני", "1", "2"] if person_value else False
+                
+
+                
+                if has_milon_person_info:
+                    # Use grammatical person info from milon to apply gender conversion
+                    if self.debug:
+                        print(f"[DEBUG] Calling determine_column_and_gender for '{search_word}': person_context={person_context}, source_gender={source_gender}, target_gender={target_gender}, gender_context={gender_context}, person_value={person_value}")
+                    column_to_use, tts_gender = self.text_processor.determine_column_and_gender(
+                        person_context, False, source_gender, target_gender, gender_context, True, False, person_value
+                    )
+                    replacement = row.iloc[0][column_to_use]
+                    if self.debug:
+                        print(f"[DEBUG] Using milon person_value '{person_value}' for gender conversion: '{replacement}' (column: {column_to_use})")
+                elif '/' in search_word:
+                    # Slash form without person indicators - show both forms: "זכר, נקבה"
                     zachar_val = row.iloc[0].get('Zachar', '') if 'Zachar' in row.columns else ''
                     nekeva_val = row.iloc[0].get('Nekeva', '') if 'Nekeva' in row.columns else ''
                     
@@ -618,7 +731,7 @@ class HebrewEnhanceTranslation(aLobe):
                         replacement = f"{str(zachar_val).strip()}, {str(nekeva_val).strip()}"
                         tts_gender = "male"  # Default TTS gender for combined forms
                         if self.debug:
-                            print(f"[DEBUG] Slash form '{search_word}' with no person indicators - combining both forms: '{replacement}'")
+                            print(f"[DEBUG] Slash form '{search_word}' with no person indicators - using: '{replacement}'")
                     else:
                         # Fallback to original if gender columns are empty
                         replacement = row.iloc[0]['Original']
@@ -628,6 +741,8 @@ class HebrewEnhanceTranslation(aLobe):
                             print(f"[DEBUG] Slash form '{search_word}' - gender columns empty, using original: '{replacement}'")
                 else:
                     # Regular word - use original word
+                    if self.debug:
+                        print(f"[DEBUG] TAKING ORIGINAL PATH for '{search_word}' - no person indicators or slash")
                     replacement = row.iloc[0]['Original']
                     used_original_word = True
                     tts_gender = "male"  # Default TTS gender
@@ -858,25 +973,36 @@ class HebrewEnhanceTranslation(aLobe):
             table.display_table("[FINAL] PROCESSING TABLE", line_number)
             self._print_search_statistics()
 
+        # Apply VAV removal to final output before returning
+        final_ssml_cleaned = self._apply_vav_removal_to_text(final_ssml)
+        ssml_clean_cleaned = self._apply_vav_removal_to_text(ssml_clean)
+        ssml_marked_cleaned = self._apply_vav_removal_to_text(ssml_marked)
+        
+        # Apply VAV removal to dictionary replacements for display
+        dict_words_cleaned = {}
+        if dict_words:
+            for orig, repl in dict_words.items():
+                dict_words_cleaned[orig] = self._apply_vav_removal_to_text(repl)
+
         if self.debug:
             try:
-                print(f"  Clean result: '{ssml_clean}'")
-                print(f"  Marked result: '{ssml_marked}'")
-                print(f"  Dictionary changes: {dict_words}")
-                print(f"  Red colored result: '{self._add_terminal_colors(ssml_marked)}'")
+                print(f"  Clean result: '{ssml_clean_cleaned}'")
+                print(f"  Marked result: '{ssml_marked_cleaned}'")
+                print(f"  Dictionary changes: {dict_words_cleaned}")
+                print(f"  Red colored result: '{self._add_terminal_colors(ssml_marked_cleaned)}'")
                 print(f"[SSML] FULL SSML BUFFER (with <speak> tags):")
-                print(final_ssml)
+                print(final_ssml_cleaned)
             except UnicodeEncodeError:
                 print("  [DEBUG] Unicode output suppressed due to console encoding limitations")
-                print(f"  Dictionary changes count: {len(dict_words) if dict_words else 0}")
-                print(f"  SSML text length: {len(final_ssml)} characters")
+                print(f"  Dictionary changes count: {len(dict_words_cleaned) if dict_words_cleaned else 0}")
+                print(f"  SSML text length: {len(final_ssml_cleaned)} characters")
 
         return {
-            'ssml_text': final_ssml,
-            'ssml_clean': ssml_clean,
-            'ssml_marked': ssml_marked,
-            'show_text': text,  # Original input for display
-            'dict_words': dict_words,
+            'ssml_text': final_ssml_cleaned,
+            'ssml_clean': ssml_clean_cleaned,
+            'ssml_marked': ssml_marked_cleaned,
+            'show_text': ssml_clean_cleaned,  # Show the processed text instead of original
+            'dict_words': dict_words_cleaned,
             'original_input': text,
             'processing_table': table  # Include table for export functionality
         }
@@ -1478,6 +1604,32 @@ class HebrewEnhanceTranslation(aLobe):
             print(f"    [CONTEXT] No gender found in 4 lines from row {current_row_index + 1}")
         return None
 
+    def _is_possessive_pronoun(self, word):
+        """Check if a word is a Hebrew possessive pronoun that should undergo gender conversion"""
+        # Clean the word for comparison
+        cleaned_word = self._TextCleaningUtils.normalize_quotes(word.strip()).lower()
+        
+        # Define possessive pronouns that should undergo gender conversion
+        possessive_pronouns = {
+            'שלו', 'שלה',     # his/hers
+            'שלי',           # mine (less common but still gendered)
+            'שלך',           # yours (gendered) 
+            'שלכם', 'שלכן',  # yours (plural, gendered)
+            'שלנו',          # ours
+            'שלהם', 'שלהן'   # theirs (gendered)
+        }
+        
+        # Also check if after stripping prefix, we get a possessive
+        # This handles cases like "בשלו", "לשלה", etc.
+        prefixes = ['ב', 'ל', 'מ', 'כ', 'ש', 'ה', 'ו']
+        for prefix in prefixes:
+            if cleaned_word.startswith(prefix) and len(cleaned_word) > len(prefix):
+                stripped = cleaned_word[len(prefix):]
+                if stripped in possessive_pronouns:
+                    return True
+        
+        return cleaned_word in possessive_pronouns
+
     def _word_will_likely_change_in_milon(self, word):
         """Check if a word is likely to be converted/changed in milon processing"""
         if not word:
@@ -1510,6 +1662,11 @@ class HebrewEnhanceTranslation(aLobe):
             search_word = text.strip()
             if not search_word:
                 return None
+                
+            # OPTIMIZATION: Check comprehensive word result cache first
+            cache_key = f"{search_word}|{gender_context}|{self.gender}"
+            if cache_key in self._word_result_cache:
+                return self._word_result_cache[cache_key]
 
 
 
@@ -1521,12 +1678,20 @@ class HebrewEnhanceTranslation(aLobe):
                 self.text_processor.global_context.get('force_maintain_gender')
             )
 
-            if has_person_indicator:
-                # Person indicators detected - apply gender parameter conversion
+            # POSSESSIVE PRONOUN FIX: Check if this is a possessive pronoun
+            is_possessive = self._is_possessive_pronoun(search_word)
+            if is_possessive:
+                # Set flag in global context so hebrew.py can see it
+                self.text_processor.global_context['force_possessive_conversion'] = True
+                if self.debug:
+                    print(f"[DEBUG] _pure_milon_lookup: Detected possessive pronoun '{search_word}' - will apply gender conversion")
+
+            if has_person_indicator or is_possessive:
+                # Person indicators detected OR possessive pronoun - apply gender parameter conversion
                 source_gender = self.gender[0] if len(self.gender) >= 1 else 'f'
                 target_gender = self.gender[2] if len(self.gender) >= 3 else source_gender
             else:
-                # No person indicators - use same gender for both (no conversion)
+                # No person indicators and not possessive - use same gender for both (no conversion)
                 # Default to masculine form when no person indicators are detected
                 default_gender = 'm'  # Use masculine as default when no person context
                 source_gender = default_gender
@@ -1555,12 +1720,18 @@ class HebrewEnhanceTranslation(aLobe):
             if found:  # Return result if word was found in dictionary, regardless of conversion
                 # Convert tts_gender to single letter format for table
                 gender_letter = 'm' if tts_gender == "male" else 'f' if tts_gender == "female" else None
-                return (search_word, replacement, gender_letter, is_exclusive_gender)
+                result = (search_word, replacement, gender_letter, is_exclusive_gender)
+                # Store successful result in comprehensive cache
+                self._word_result_cache[cache_key] = result
+                return result
 
             # Dual gender forms should be handled through the milon dictionary
             # Removed hardcoded /ה handling - all slash forms should be in milon
 
-            return None
+            # Store result in comprehensive cache before returning
+            result = None
+            self._word_result_cache[cache_key] = result
+            return result
 
         except Exception as e:
             if self.debug:
@@ -1706,6 +1877,15 @@ class HebrewEnhanceTranslation(aLobe):
                     words = [table.rows[i + j]['source'] for j in range(word_count)]
                     combination = ' '.join(words)
 
+                    # OPTIMIZATION: Check combination cache first
+                    combo_cache_key = f"{combination}|{word_count}|{self.gender}"
+                    if combo_cache_key in self._combination_cache:
+                        cached_result = self._combination_cache[combo_cache_key]
+                        if cached_result and (not best_match or word_count > best_word_count):
+                            best_match = cached_result
+                            best_word_count = word_count
+                        continue
+
                     # SMART SKIP: Quick dictionary check before full milon lookup
                     normalized_search = self._TextCleaningUtils.normalize_quotes(combination).lower()
                     quick_hit = hasattr(self, '_milon_dict') and normalized_search in self._milon_dict
@@ -1764,6 +1944,9 @@ class HebrewEnhanceTranslation(aLobe):
 
                         dict_result = self._pure_milon_lookup(combination, gender_context=gender_context)
 
+                        # Store result in combination cache (whether found or not)
+                        self._combination_cache[combo_cache_key] = dict_result
+                        
                         if dict_result:
                             # Found a match - save as best match (longer matches override shorter ones)
                             best_match = dict_result
@@ -2211,8 +2394,7 @@ class HebrewEnhanceTranslation(aLobe):
                         continue
 
                     # Don't override if it's already a date ordinal conversion (contains month names)
-                    hebrew_months = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
-                                   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר']
+                    hebrew_months = list(self._hebrew_months.values())  # Use centralized HEBREW_MONTHS
                     if any(month in heb2num_value for month in hebrew_months):
                         if self.debug:
                             print(f"  ⏭️  Skipping '{word}' (row {i}) - already has date ordinal conversion: '{heb2num_value}'")
@@ -2249,13 +2431,32 @@ class HebrewEnhanceTranslation(aLobe):
                 try:
                     number = int(word)
 
-                    # Special handling for 7+ digit numbers: convert digit-by-digit as feminine
+                    # Special handling for 7+ digit numbers: convert each digit through heb2num with feminine gender
                     if len(word) >= 7:
-                        hebrew_digits = self._convert_digits_number(word, 'נקבה')  # Always feminine for digit-by-digit
-                        table.set_result(i, 'heb2num', hebrew_digits, 'IndividualNumberProcessor')
-                        if self.debug:
-                            print(f"  [DIGITS] 7+ digit number: '{word}' → '{hebrew_digits}' (row {i}, digit-by-digit feminine)")
-                        continue  # Skip regular number processing
+                        # RULE: 7+ digit numbers - call heb2num for each digit separately with feminine gender (for nikud)
+                        hebrew_digits = []
+                        for digit_char in word:
+                            if digit_char.isdigit():
+                                try:
+                                    digit_num = int(digit_char)
+                                    # Call heb2num for each individual digit with feminine gender
+                                    digit_hebrew = self.heb2num(digit_num, 'f', construct_state=False)
+                                    if digit_hebrew and digit_hebrew.strip():
+                                        hebrew_digits.append(digit_hebrew.strip())
+                                    else:
+                                        # Fallback if heb2num fails for this digit
+                                        hebrew_digits.append(digit_char)
+                                except Exception as e:
+                                    if self.debug:
+                                        print(f"  [DIGIT_ERROR] Failed heb2num for digit '{digit_char}': {e}")
+                                    hebrew_digits.append(digit_char)
+                        
+                        if hebrew_digits:
+                            result = ' '.join(hebrew_digits)
+                            table.set_result(i, 'heb2num', result, 'IndividualNumberProcessor')
+                            if self.debug:
+                                print(f"  [HEB2NUM_DIGITS] 7+ digit number: '{word}' → '{result}' (row {i}, each digit via heb2num feminine with nikud)")
+                            continue  # Skip regular number processing
 
                     # Check if this is a year-like number (2000-2030) - force feminine and skip other gender detection
                     if 2000 <= number <= 2030:
@@ -2918,12 +3119,31 @@ class HebrewEnhanceTranslation(aLobe):
 
             # ULTRA-FAST: Create dictionary lookup (288x faster than pandas!)
             self._milon_dict = {}
+            
+            # FIRST PASS: Add all standalone entries (non-slash forms) to establish base dictionary
             for _, row in df_main.iterrows():
                 original = str(row.get('Original', '')).strip()
-                if original:
-                    # Normalize the key for consistent lookup
+                if original and '/' not in original:
+                    # Regular entry without slash - these take priority
                     normalized_key = self._TextCleaningUtils.normalize_quotes(original).lower()
                     self._milon_dict[normalized_key] = row.to_dict()
+            
+            # SECOND PASS: Add slash form entries only if they don't override existing standalone entries
+            for _, row in df_main.iterrows():
+                original = str(row.get('Original', '')).strip()
+                if original and '/' in original:
+                    # Handle slash forms: create separate entries for each part
+                    # e.g., "תוכל/תוכלי" creates entries for both "תוכל" and "תוכלי"
+                    # BUT only if standalone entries don't already exist
+                    parts = [part.strip() for part in original.split('/')]
+                    for part in parts:
+                        if part:  # Skip empty parts
+                            normalized_key = self._TextCleaningUtils.normalize_quotes(part).lower()
+                            # Only add if no standalone entry exists (prevent override)
+                            if normalized_key not in self._milon_dict:
+                                self._milon_dict[normalized_key] = row.to_dict()
+                            elif self.debug:
+                                print(f"[DEBUG] Skipping slash part '{part}' from '{original}' - standalone entry exists")
 
             # Initialize search statistics for debug mode
             self._search_stats = {
@@ -3937,19 +4157,31 @@ class HebrewEnhanceTranslation(aLobe):
         print(f"[RUNTIME] PROCESS_TEXT RUNTIME: {runtime_ms:.3f}ms")
         print(f"🔊 FULL SSML BUFFER (with <speak> tags): {final_ssml}")
 
+        # Apply VAV removal to final output before returning
+        final_ssml_cleaned = self._apply_vav_removal_to_text(final_ssml)
+        ssml_clean_cleaned = self._apply_vav_removal_to_text(ssml_clean or '')
+        ssml_marked_cleaned = self._apply_vav_removal_to_text(ssml_clean_with_markers or '')
+        show_text_cleaned = self._apply_vav_removal_to_text(cleaned_show_text or '')
+        
+        # Apply VAV removal to line-by-line data
+        show_text_lines_cleaned = [self._apply_vav_removal_to_text(line) for line in show_text_lines]
+        ssml_clean_lines_cleaned = [self._apply_vav_removal_to_text(line) for line in ssml_clean_lines_final]
+        ssml_marked_lines_cleaned = [self._apply_vav_removal_to_text(line) for line in ssml_clean_lines]
+        processed_lines_cleaned = [self._apply_vav_removal_to_text(line) for line in processed_lines]
+
         return {
-            'ssml_text': final_ssml,
-            'ssml_clean': ssml_clean or '',
-            'ssml_marked': ssml_clean_with_markers or '',  # Keep markers as-is for proper highlighting
-            'show_text': cleaned_show_text or '',
+            'ssml_text': final_ssml_cleaned,
+            'ssml_clean': ssml_clean_cleaned,
+            'ssml_marked': ssml_marked_cleaned,  # Keep markers as-is for proper highlighting
+            'show_text': show_text_cleaned,
             'dict_words': all_dict_words or {},
             'original_input': original_input or '',
             'line_by_line': {
                 'input_lines': input_lines,
-                'show_text_lines': show_text_lines,
-                'ssml_clean_lines': ssml_clean_lines_final,  # Already cleaned
-                'ssml_marked_lines': ssml_clean_lines,  # Keep markers as-is for proper highlighting
-                'processed_lines': processed_lines
+                'show_text_lines': show_text_lines_cleaned,
+                'ssml_clean_lines': ssml_clean_lines_cleaned,  # Already cleaned
+                'ssml_marked_lines': ssml_marked_lines_cleaned,  # Keep markers as-is for proper highlighting
+                'processed_lines': processed_lines_cleaned
             }
         }
 
@@ -4203,18 +4435,21 @@ class HebrewEnhanceTranslation(aLobe):
                     elif hebrew_char == "מ":
                         hebrew_char = "מְהָ"
 
+                    # Convert month name to nikudized version (including ב prefix)
+                    nikudized_month_with_prefix = self._get_nikudized_month_name(f"ב{month_name}")
+
                     if year_str:
                         try:
                             year_num = int(year_str)
                             if 1900 <= year_num <= 2100:
                                 year_text = self._safe_date_processor().convert_year_to_hebrew(year_num)
-                                converted = f"{hebrew_char}{day_text} ב{month_name} {year_text}"
+                                converted = f"{hebrew_char}{day_text} {nikudized_month_with_prefix} {year_text}"
                             else:
                                 continue
                         except ValueError:
                             continue
                     else:
-                        converted = f"{hebrew_char}{day_text} ב{month_name}"
+                        converted = f"{hebrew_char}{day_text} {nikudized_month_with_prefix}"
 
                     ssml_result = converted
 
@@ -5629,6 +5864,133 @@ class HebrewEnhanceTranslation(aLobe):
             return text
 
         @staticmethod
+        def remove_duplicate_vav(word):
+            """
+            Remove the first VAV (ו) when there are two VAVs where:
+            - First VAV has no nikud
+            - Second VAV has nikud
+            Example: 'לווַדֵּא' -> 'לוַדֵּא'
+            """
+            if not word or len(word) < 2:
+                return word
+            
+            # Hebrew nikud range: \u0591-\u05C7 (includes vowel points and cantillation marks)
+            result = []
+            i = 0
+            
+            while i < len(word):
+                char = word[i]
+                
+                # Check if current character is VAV (ו)
+                if char == 'ו':
+                    # Check if there's another VAV ahead
+                    j = i + 1
+                    found_second_vav = False
+                    
+                    # Look ahead for the next VAV
+                    while j < len(word):
+                        if word[j] == 'ו':
+                            # Found second VAV, check if it has nikud after it
+                            has_nikud_after_second = False
+                            k = j + 1
+                            while k < len(word) and '\u0591' <= word[k] <= '\u05C7':
+                                has_nikud_after_second = True
+                                k += 1
+                            
+                            if has_nikud_after_second:
+                                # Check if first VAV has no nikud
+                                has_nikud_after_first = False
+                                m = i + 1
+                                while m < j and '\u0591' <= word[m] <= '\u05C7':
+                                    has_nikud_after_first = True
+                                    m += 1
+                                
+                                if not has_nikud_after_first:
+                                    # Skip the first VAV (don't add it to result)
+                                    found_second_vav = True
+                                    break
+                            break
+                        elif not ('\u0591' <= word[j] <= '\u05C7'):
+                            # If we encounter a non-nikud character, stop looking
+                            break
+                        j += 1
+                    
+                    if not found_second_vav:
+                        # No matching second VAV with nikud found, keep this VAV
+                        result.append(char)
+                else:
+                    # Not a VAV, keep the character
+                    result.append(char)
+                
+                i += 1
+            
+            return ''.join(result)
+
+        @staticmethod
+        def fix_double_patach_kamatz(word):
+            """
+            If word has nikud where:
+            - Letter 1 has פתח (ַ) or קמץ (ָ) 
+            - Letter 2 has פתח (ַ) or קמץ (ָ)
+            Replace the first nikud with שבא (ְ)
+            Example: 'בַּתַּהֲלִיךְ' -> 'בְתַּהֲלִיךְ'
+            """
+            if not word or len(word) < 4:  # Need at least 2 letters + 2 nikud
+                return word
+            
+            # Hebrew nikud characters
+            PATACH = '\u05B7'  # ַ (patach)
+            KAMATZ = '\u05B8'  # ָ (kamatz)
+            SHVA = '\u05B0'    # ְ (shva)
+            
+            # Convert to list for easier manipulation
+            chars = list(word)
+            
+            # Find first and second Hebrew letters with their nikud
+            first_letter_pos = -1
+            second_letter_pos = -1
+            
+            for i, char in enumerate(chars):
+                if '\u05D0' <= char <= '\u05EA':  # Hebrew letter
+                    if first_letter_pos == -1:
+                        first_letter_pos = i
+                    elif second_letter_pos == -1:
+                        second_letter_pos = i
+                        break
+            
+            if first_letter_pos == -1 or second_letter_pos == -1:
+                return word  # Need at least 2 Hebrew letters
+            
+            # Check nikud after first letter
+            first_has_patach_kamatz = False
+            first_nikud_pos = -1
+            
+            for i in range(first_letter_pos + 1, second_letter_pos):
+                if chars[i] == PATACH or chars[i] == KAMATZ:
+                    first_has_patach_kamatz = True
+                    first_nikud_pos = i
+                    break
+            
+            if not first_has_patach_kamatz:
+                return word  # First letter doesn't have patach/kamatz
+            
+            # Check nikud after second letter
+            second_has_patach_kamatz = False
+            
+            for i in range(second_letter_pos + 1, len(chars)):
+                if chars[i] == PATACH or chars[i] == KAMATZ:
+                    second_has_patach_kamatz = True
+                    break
+                elif '\u05D0' <= chars[i] <= '\u05EA':  # Another Hebrew letter
+                    break  # Stop at next letter
+            
+            if second_has_patach_kamatz:
+                # Replace first patach/kamatz with shva
+                chars[first_nikud_pos] = SHVA
+            
+            return ''.join(chars)
+
+        @staticmethod
         def clean_noun_for_lookup(noun):
             """Clean noun for dictionary lookup - removes markers"""
             if not noun:
@@ -5636,6 +5998,36 @@ class HebrewEnhanceTranslation(aLobe):
 
             clean_noun = noun  # Remove  markers
             return clean_noun.strip()
+
+    def _apply_vav_removal_to_text(self, text):
+        """
+        Apply VAV removal to entire text while preserving word boundaries.
+        Splits text by spaces and applies remove_duplicate_vav to each word.
+        """
+        if not text:
+            return text
+        
+        # Split by whitespace, process each word, then rejoin
+        words = text.split()
+        processed_words = []
+        
+        for word in words:
+            # Extract word from any HTML/XML tags or punctuation
+            clean_word, leading, trailing = self._TextCleaningUtils.extract_word_parts(word)
+            
+            # Apply VAV removal and nikud correction to the clean Hebrew word part
+            if clean_word:
+                # First apply VAV removal
+                processed_word = self._TextCleaningUtils.remove_duplicate_vav(clean_word)
+                # Then apply nikud correction (patach/kamatz -> shva)
+                processed_word = self._TextCleaningUtils.fix_double_patach_kamatz(processed_word)
+                # Reconstruct with leading/trailing punctuation
+                processed_words.append(leading + processed_word + trailing)
+            else:
+                # No clean word found, keep original
+                processed_words.append(word)
+        
+        return ' '.join(processed_words)
 
     def _get_currency_nouns(self):
         """
@@ -5681,5 +6073,41 @@ class HebrewEnhanceTranslation(aLobe):
                 print(f"{full_timestamp} {line_num:3d}  {message:<60} (+{elapsed_since_last:6.3f}ms) [Total: {elapsed_since_start:7.3f}ms]")
         self._last_log_time = current_time
         return line_num + 1
+
+
+# Test function for VAV removal (can be removed after testing)
+def test_vav_removal():
+    """Test the remove_duplicate_vav function - applied only at final output"""
+    test_cases = [
+        ('לווַדֵּא', 'לוַדֵּא'),  # Original example
+        ('לווא', 'לווא'),      # No nikud on second vav
+        ('לוּוַדֵּא', 'לוּוַדֵּא'),  # First vav has nikud
+        ('ווא', 'ווא'),        # Only two vavs, no nikud
+        ('לווּ', 'לווּ'),       # Second vav has nikud but no third character
+        ('לווַ', 'לוַ'),        # Second vav has nikud
+        ('לו', 'לו'),          # Single vav
+        ('', ''),              # Empty string
+        ('שלום', 'שלום'),      # No vavs
+    ]
+    
+    print("Testing VAV removal function (applied only before program exit):")
+    for input_word, expected in test_cases:
+        result = HebrewEnhanceTranslation._TextCleaningUtils.remove_duplicate_vav(input_word)
+        status = "✓" if result == expected else "✗"
+        print(f"{status} '{input_word}' -> '{result}' (expected: '{expected}')")
+    
+    # Test text-level application
+    engine = HebrewEnhanceTranslation()
+    test_text = "זה טקסט עם מילה לווַדֵּא ומילה אחרת"
+    expected_text = "זה טקסט עם מילה לוַדֵּא ומילה אחרת"
+    result_text = engine._apply_vav_removal_to_text(test_text)
+    status = "✓" if result_text == expected_text else "✗"
+    print(f"\nText-level test:")
+    print(f"{status} '{test_text}' -> '{result_text}' (expected: '{expected_text}')")
+
+
+if __name__ == "__main__":
+    test_vav_removal()
+
 
 __all__ = ["HebrewEnhanceTranslation", "aLobe"]

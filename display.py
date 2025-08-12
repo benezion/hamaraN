@@ -204,11 +204,11 @@ class DisplayProcessor:
                     min-height: 1.2em;
                 }}
                 .original-line {{ 
-                    background-color: #e8f4f8; 
+                    background-color: #fff59d; 
                     border-bottom: 1px solid #ccc;
                 }}
                 .processed-line {{ 
-                    background-color: #f0f8e8; 
+                    background-color: #ffffff; 
                 }}
                 .numbered-line.empty {{ 
                     opacity: 0.5; 
@@ -320,11 +320,11 @@ class DisplayProcessor:
                     min-height: 1.2em;
                 }}
                 .original-line {{ 
-                    background-color: #e8f4f8; 
+                    background-color: #fff59d; 
                     border-bottom: 1px solid #ccc;
                 }}
                 .processed-line {{ 
-                    background-color: #f0f8e8; 
+                    background-color: #ffffff; 
                 }}
                 .numbered-line.empty {{ 
                     opacity: 0.5; 

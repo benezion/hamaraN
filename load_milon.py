@@ -8,9 +8,16 @@ Maintains original formatting, colors, and structure.
 import pandas as pd
 import os
 import shutil
+import warnings
 from datetime import datetime
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.styles import Font, Fill, PatternFill, Border, Side, Alignment
+from openpyxl.styles.colors import Color
+import openpyxl.utils
+
+# Suppress openpyxl warnings about unsupported image formats
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 class MilonProcessor:
     def __init__(self, source_file, backup_dir="backup"):
@@ -106,28 +113,38 @@ class MilonProcessor:
             output_file = self.source_file
 
         try:
-            # Step 1: Copy the original file to preserve all formatting
+            # Step 1: Always copy original to preserve ALL formatting, colors, structure
             if output_file != self.source_file:
                 shutil.copy2(self.source_file, output_file)
             
-            # Step 2: Load the copied workbook and update with new data
+            # Step 2: Load the copied workbook
             wb = load_workbook(output_file)
             ws = wb.active
             
-            # Step 3: Clear data area (but keep formatting)
-            # Get the original data range
-            original_max_row = ws.max_row
-            original_max_col = ws.max_column
+            # Step 3: Smart data clearing - only clear actual data rows, preserve all formatting
+            # Find actual data range (not empty rows at the end)
+            actual_data_rows = len(self.df) + 1  # +1 for header
+            max_data_col = len(self.df.columns) if not self.df.empty else 7
             
-            # Clear only the data cells, preserving formatting
-            for row in range(2, original_max_row + 1):  # Skip header row
-                for col in range(1, original_max_col + 1):
-                    cell = ws.cell(row=row, column=col)
-                    cell.value = None
+            # Only clear cells that will be overwritten, preserve all formatting
+            # Clear from row 2 to the end of our new data + small buffer
+            clear_until_row = min(ws.max_row, actual_data_rows + 50)  # Small buffer
+            clear_until_col = min(ws.max_column, max_data_col + 3)    # Small buffer
+            
+            print(f"🧹 Clearing data area: rows 2-{clear_until_row}, cols 1-{clear_until_col}")
+            
+            # Surgically clear only the data area we'll use
+            for row in range(2, clear_until_row + 1):  # Skip header row
+                for col in range(1, clear_until_col + 1):
+                    try:
+                        cell = ws.cell(row=row, column=col)
+                        cell.value = None  # Clear value but preserve formatting
+                    except:
+                        continue  # Skip problematic cells
             
             # Step 4: Update headers if we have new columns
             df_columns = list(self.df.columns)
-            original_headers = [ws.cell(row=1, column=c).value for c in range(1, original_max_col + 1)]
+            original_headers = [ws.cell(row=1, column=c).value for c in range(1, clear_until_col + 1)]
             
             # Add new column headers if needed
             for c_idx, col_name in enumerate(df_columns, start=1):
@@ -156,14 +173,121 @@ class MilonProcessor:
                 for c_idx, (col_name, value) in enumerate(row_data.items(), start=1):
                     ws.cell(row=r_idx, column=c_idx).value = value
             
-            # Step 7: Save the workbook
+            # Step 7: Apply beautiful formatting before final save
+            print("🎨 Applying beautiful formatting...")
+            self._apply_nice_formatting(wb)
+            
+            # Step 8: Save the workbook with formatting
             wb.save(output_file)
+            print("✅ Beautiful formatting applied successfully!")
             self.working_file = output_file
             return True
             
         except Exception as e:
             print(f"❌ Error saving file: {e}")
             return False
+    
+    def _apply_nice_formatting(self, wb):
+        """Apply beautiful formatting to all worksheets"""
+        try:
+            # Define EXACT original color scheme from milon_zachar_nekeva.xlsx
+            HEADER_COLOR_BLUE = "366092"     # Blue headers for Noun_Genders, Halacha, מספרים (FF366092)
+            ALT_ROW_COLOR = "F2F2F2"         # Original light gray (FFF2F2F2) 
+            WHITE_ROW_COLOR = "000000"       # Original white rows (00000000)
+            BORDER_COLOR = "D0D0D0"          # Original border gray (FFD0D0D0)
+            # Note: Main sheet (גיליון1) uses theme color, other sheets use blue RGB
+
+            # Define styles - Updated per requirements
+            header_font = Font(name="Arial", size=12, bold=True, color="FFFFFF")  # Headers: 12pt bold white
+            data_font = Font(name="Arial", size=12)  # Data: 12pt (updated from 11pt)
+            
+            # Create different header fills for different sheets
+            header_fill_blue = PatternFill(start_color=HEADER_COLOR_BLUE, end_color=HEADER_COLOR_BLUE, fill_type="solid")
+            alt_row_fill = PatternFill(start_color=ALT_ROW_COLOR, end_color=ALT_ROW_COLOR, fill_type="solid")
+            white_row_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")  # True white for alternating
+
+            thin_border = Border(
+                left=Side(style='thin', color=BORDER_COLOR),
+                right=Side(style='thin', color=BORDER_COLOR),
+                top=Side(style='thin', color=BORDER_COLOR),
+                bottom=Side(style='thin', color=BORDER_COLOR)
+            )
+
+            # Alignment - Updated per requirements
+            center_alignment = Alignment(horizontal='center', vertical='center')  # For headers only
+            right_alignment = Alignment(horizontal='right', vertical='center')    # For ALL data fields
+
+            # Format each worksheet
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                print(f"  🎨 Formatting sheet: {sheet_name}")
+                
+                # Get actual data range with reasonable limits
+                max_row = min(ws.max_row, 1000)  # Limit for performance
+                max_col = min(ws.max_column, 15)
+                
+                # Format headers (row 1) - Different treatment per sheet
+                for col in range(1, max_col + 1):
+                    cell = ws.cell(row=1, column=col)
+                    cell.font = header_font
+                    cell.border = thin_border
+                    cell.alignment = center_alignment
+                    
+                    # Apply different header colors based on sheet type
+                    if sheet_name == 'גיליון1':
+                        # Main sheet: Preserve original formatting (theme-based headers)
+                        # Only set font and alignment, keep existing fill color
+                        cell.font = Font(name="Arial", size=12, bold=True)  # No color override for main sheet
+                    else:
+                        # Other sheets: Use blue background with white text (like original)
+                        cell.fill = header_fill_blue
+                        cell.font = header_font  # White text for blue background
+                
+                # Format data rows - EXACT original pattern
+                for row in range(2, max_row + 1):
+                    # Apply row formatting with EXACT original alternating pattern
+                    for col in range(1, max_col + 1):
+                        cell = ws.cell(row=row, column=col)
+                        
+                        # Set font (original uses Arial)
+                        cell.font = data_font
+                        
+                        # EXACT original alternating: Even rows = gray (F2F2F2), Odd rows = white
+                        if row % 2 == 0:  # Even rows (2,4,6,8...) = gray
+                            cell.fill = alt_row_fill
+                        else:  # Odd rows (3,5,7,9...) = white
+                            cell.fill = white_row_fill
+                        
+                        # Set border and alignment
+                        cell.border = thin_border
+                        cell.alignment = right_alignment  # ALL data fields right-aligned
+                
+                # Set column widths
+                for col in range(1, max_col + 1):
+                    column_letter = openpyxl.utils.get_column_letter(col)
+                    if col == 1:  # Hebrew text column
+                        ws.column_dimensions[column_letter].width = 20
+                    elif col == 2:  # Nikud column
+                        ws.column_dimensions[column_letter].width = 25
+                    else:  # Other columns
+                        ws.column_dimensions[column_letter].width = 15
+                
+                # Set row heights for first 100 rows
+                for row in range(1, min(max_row + 1, 101)):
+                    ws.row_dimensions[row].height = 20
+            
+            # Special formatting for main sheet
+            if wb.sheetnames:
+                ws_main = wb[wb.sheetnames[0]]  # First sheet (main data)
+                # Add freeze panes and autofilter
+                ws_main.freeze_panes = 'A2'
+                if ws_main.max_row > 1:
+                    ws_main.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(ws_main.max_column)}1"
+                print(f"  ✅ Added freeze panes and autofilter to main sheet")
+            
+        except Exception as e:
+            print(f"⚠️ Warning: Could not apply all formatting: {e}")
+            # Continue without failing the entire process
 
 def process_milon_file():
     """

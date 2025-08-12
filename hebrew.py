@@ -23,6 +23,8 @@ class HebrewTextProcessor:
         self.debug = debug
 
     def determine_column_and_gender(self, person_context, is_first_person, source_gender, target_gender, gender_context=None, is_verb_from_dictionary=False, is_neutral_second_person=False, person_value=None, debug_flag=False):
+        if self.debug:
+            print(f"[DETERMINE_DEBUG] last_milon_gender={self.last_milon_gender}, person_value={person_value}, source_gender={source_gender}, target_gender={target_gender}")
         if self.last_milon_gender in ["male", "female"]:
             if debug_flag:
                 print(f"[DEBUG] last_milon_gender found: {self.last_milon_gender}")
@@ -37,12 +39,12 @@ class HebrewTextProcessor:
                 print(f"[DEBUG] Using column: {column_to_use}, tts_gender: {tts_gender}")
             return column_to_use, tts_gender
         if is_verb_from_dictionary and person_value is not None:
-            if person_value == "ראשון":
+            if person_value in ["ראשון", "1"]:
                 selected_gender = source_gender
                 column_to_use = 'Zachar' if selected_gender == 'm' else 'Nekeva'
                 tts_gender = "male" if selected_gender == 'm' else "female"
                 return column_to_use, tts_gender
-            elif person_value == "שני":
+            elif person_value in ["שני", "2"]:
                 selected_gender = target_gender
                 column_to_use = 'Zachar' if selected_gender == 'm' else 'Nekeva'
                 tts_gender = "male" if selected_gender == 'm' else "female"

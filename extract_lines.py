@@ -33,6 +33,30 @@ def save_backup_params(start_line, total_lines, from_line, show_lines):
     except Exception as e:
         print(f"Warning: Could not save backup parameters: {str(e)}")
 
+def sort_and_deduplicate_lines(lines):
+    """
+    Sort lines alphabetically and remove duplicates.
+    Empty lines are removed during this process.
+    Returns a list of unique, sorted lines.
+    """
+    if not lines:
+        return []
+    
+    # Remove empty lines and strip whitespace
+    cleaned_lines = []
+    for line in lines:
+        line_stripped = str(line).strip() if line is not None else ""
+        if line_stripped:  # Only keep non-empty lines
+            cleaned_lines.append(line_stripped)
+    
+    # Remove duplicates by converting to set, then sort
+    unique_lines = list(set(cleaned_lines))
+    sorted_lines = sorted(unique_lines)
+    
+    return sorted_lines
+
+# Note: combine_lines_max_words function removed - now processing individual lines
+
 def generate_html_output(extracted_lines, actual_start_line, actual_end_line, output_file):
     """Generate HTML output with line numbers"""
     html_file = output_file.replace('.txt', '.html')
@@ -194,13 +218,13 @@ def main():
                 print("Usage: python extract_lines.py <start_line> <total_lines> <from_line> <show_lines>")
                 print("Example: python extract_lines.py 680 20 3 5")
                 print("  start_line: Starting line number in input file")
-                print("  total_lines: Number of lines to extract from input (buffer size)")
-                print("  from_line: Starting line within the buffer to display (1-based)")
-                print("  show_lines: Number of lines to display from the buffer")
-                print("  Result: Extract 20 lines from line 680, then show 5 lines starting from line 3 in buffer")
+                print("  total_lines: Used to calculate extraction buffer (buffer = total_lines * 3)")
+                print("  from_line: Starting line within the extracted lines to display (1-based)")
+                print("  show_lines: Number of individual lines to display")
+                print("  Result: Extract lines from 680, sort and deduplicate, show 5 individual lines starting from line 3")
                 print("")
                 print("Comma format examples:")
-                print("  680,20,3,5  : Extract 20 lines from 680, show 5 lines starting from buffer line 3")
+                print("  680,20,3,5  : Extract from line 680, sort and deduplicate, show 5 individual lines starting from line 3")
                 print("  ,,1,        : Use backup start_line and total_lines, from_line=1, use backup show_lines")
                 print("  680,,,5     : start_line=680, use backup total_lines and from_line, show_lines=5")
                 print("")
@@ -317,8 +341,11 @@ def main():
         # Save current parameters to backup file
         save_backup_params(start_line, total_lines, from_line, show_lines)
         
+        # Since file is already sorted and unique, extract exact amount needed
+        buffer_size = total_lines  # Extract exactly what's needed
+        
         # Input and output file names
-        input_file = 'all_2_words_filtered_final_complete_all.xlsx'
+        input_file = 'hebrew_only_column_d.xlsx'
         output_file = 'sample_input.txt'
         
         # Check if input file exists
@@ -328,15 +355,18 @@ def main():
         
         print(f"Reading from: {input_file}")
         print(f"Parameters: start_line={start_line}, total_lines={total_lines}, from_line={from_line}, show_lines={show_lines}")
-        print(f"Extracting lines {actual_start_line} to {actual_end_line} ({lines_to_extract} lines) from input file")
-        print(f"Displaying lines {from_line} to {from_line + show_lines - 1} from the extracted buffer")
+        print(f"Will extract {buffer_size} lines starting from line {actual_start_line}")
+        print(f"File is already sorted and unique - no processing needed")
+        print(f"Will show {show_lines} individual lines starting from line {from_line}")
         print(f"Output file: {output_file}")
         
         # Read the Excel file
         wb = openpyxl.load_workbook(input_file)
         ws = wb.active
         
-        # Get the data from column D (Context) - extract full buffer first
+        # Extract exactly the needed lines since file is already prepared
+        # File is already sorted and unique, so no processing needed
+        
         extracted_buffer = []
         lines_extracted = 0
         
@@ -345,7 +375,7 @@ def main():
         # Assuming row 1 is header, so data starts from row 2
         excel_start_row = actual_start_line + 1  # +1 to skip header
         
-        for row_num in range(excel_start_row, excel_start_row + lines_to_extract):
+        for row_num in range(excel_start_row, excel_start_row + buffer_size):
             cell_value = ws.cell(row=row_num, column=4).value  # Column D is column 4
             
             if cell_value is not None:
@@ -362,25 +392,50 @@ def main():
         
         wb.close()
         
-        # Now extract the lines to display from the buffer
-        lines_to_display = extracted_buffer[display_start_index:display_start_index + show_lines]
+        # File is already sorted and unique, so extract the requested portion directly
+        print(f"Extracting {show_lines} individual lines from {len(extracted_buffer)} available lines...")
         
-        # Write to output file (only the lines to display)
+        start_index = from_line - 1  # Convert to 0-based index
+        end_index = start_index + show_lines
+        
+        # Make sure we don't exceed available lines
+        if start_index >= len(extracted_buffer):
+            print(f"Error: from_line ({from_line}) exceeds available lines ({len(extracted_buffer)})")
+            sys.exit(1)
+        
+        end_index = min(end_index, len(extracted_buffer))
+        selected_lines = extracted_buffer[start_index:end_index]
+        
+        print(f"Extracting lines {from_line} to {from_line + len(selected_lines) - 1}")
+        print(f"Selected {len(selected_lines)} individual lines for output")
+        
+        # Write to output file (individual lines)
         with open(output_file, 'w', encoding='utf-8') as f:
-            for line in lines_to_display:
+            for line in selected_lines:
                 f.write(line + '\n')
         
         print(f"Successfully extracted {lines_extracted} lines from input file")
-        print(f"Displaying {len(lines_to_display)} lines to {output_file}")
+        print(f"File was already sorted and unique - no processing needed")
+        print(f"Total lines available: {len(extracted_buffer)}")
+        print(f"Output individual lines: {len(selected_lines)}")
         
-        # Calculate the actual line numbers for the displayed lines
-        display_actual_start = actual_start_line + display_start_index
-        display_actual_end = display_actual_start + len(lines_to_display) - 1
+        # Show word count examples
+        if selected_lines:
+            print(f"Word count examples:")
+            for i, line in enumerate(selected_lines[:3], 1):
+                word_count = len(line.split())
+                print(f"  Line {i}: {word_count} words - '{line[:50]}{'...' if len(line) > 50 else ''}'")
         
-        # Generate HTML output with line numbers (only for displayed lines)
-        html_file = generate_html_output(lines_to_display, display_actual_start, display_actual_end, output_file)
+        print(f"Output written to: {output_file}")
+        
+        # Calculate the actual line numbers for the selected lines
+        display_actual_start = from_line
+        display_actual_end = from_line + len(selected_lines) - 1
+        
+        # Generate HTML output with line numbers (using individual lines)
+        html_file = generate_html_output(selected_lines, display_actual_start, display_actual_end, output_file)
         print(f"HTML output generated: {html_file}")
-        print(f"HTML shows lines {display_actual_start} to {display_actual_end}")
+        print(f"HTML shows {len(selected_lines)} individual lines")
         
         # Check if p1.bat exists
         batch_file = 'p1.bat'
